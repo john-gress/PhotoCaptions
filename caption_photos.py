@@ -30,6 +30,13 @@ Options:
                             --font-size is set.
     --no-location           Never print location info at all (useful for
                             scanned slides/photos with bogus GPS data)
+    --touch-source          Also set the modified time of the ORIGINAL
+                            source image and its JSON sidecar (in the
+                            input folder) to match photoTakenTime. For
+                            -edited files, the corresponding non-edited
+                            original is touched too, so both share the
+                            same timestamp. This modifies your Takeout
+                            export in place - off by default.
 
 Notes:
   - <input_folder> should point at the folder(s) extracted from your
@@ -361,9 +368,29 @@ def build_caption(meta: dict, geocode: bool = False, show_location: bool = True,
     return lines
 
 
+def touch_source_files(image_path: Path, json_path: Path, taken_epoch: int):
+    """Sets the modified time of the ORIGINAL source image and its JSON
+    sidecar to match taken_epoch. For '-edited' files, also touches the
+    corresponding non-edited original image in the same folder, if it
+    still exists, so both copies carry the same photoTakenTime."""
+    targets = [image_path, json_path]
+
+    if is_edited(image_path):
+        original_path = image_path.with_name(base_stem(image_path) + image_path.suffix)
+        if original_path.exists() and original_path != image_path:
+            targets.append(original_path)
+
+    for t in targets:
+        try:
+            os.utime(t, (taken_epoch, taken_epoch))
+        except Exception as e:
+            print(f"    [warning] Could not set source timestamp for {t.name}: {e}")
+
+
 def caption_image(image_path: Path, json_path: Path, output_path: Path,
                    geocode: bool = False, show_location: bool = True,
-                   font_size_override: int = None, font_scale: float = 60.0):
+                   font_size_override: int = None, font_scale: float = 60.0,
+                   touch_source: bool = False):
     with open(json_path, 'r', encoding='utf-8') as f:
         meta = json.load(f)
 
@@ -417,6 +444,9 @@ def caption_image(image_path: Path, json_path: Path, output_path: Path,
             os.utime(output_path, (taken_epoch, taken_epoch))
         except Exception as e:
             print(f"    [warning] Could not set file timestamp: {e}")
+
+        if touch_source:
+            touch_source_files(image_path, json_path, taken_epoch)
 
 
 def process_videos(in_root: Path, out_root: Path):
@@ -483,6 +513,8 @@ def main():
                      help='Divisor used for auto-scaled font size (font_size = image_width / font_scale). Lower = larger text, higher = smaller text. Default: 60. Ignored if --font-size is set.')
     ap.add_argument('--no-location', action='store_true',
                      help='Never include location info in captions (useful for scans with invalid GPS data)')
+    ap.add_argument('--touch-source', action='store_true',
+                     help='Also set the modified time of the ORIGINAL source image and its JSON sidecar (in the input folder) to match photoTakenTime. For -edited files, the corresponding non-edited original is touched too, so both share the same timestamp. This modifies your Takeout export in place.')
     args = ap.parse_args()
 
     in_root = Path(args.input_folder)
@@ -508,6 +540,7 @@ def main():
                 show_location=not args.no_location,
                 font_size_override=args.font_size,
                 font_scale=args.font_scale,
+                touch_source=args.touch_source,
             )
             count += 1
             print(f"[ok] {rel}")
