@@ -42,11 +42,12 @@ Notes:
   - <input_folder> should point at the folder(s) extracted from your
     Takeout zip(s) that contain the actual photo + .json pairs
     (e.g. "Takeout/Google Photos/Photos from 2019").
-  - Videos (mp4, mov, etc.) are not captioned, but are MOVED (not
-    copied) into the output folder in the same relative location, and
-    their modified time is set to match photoTakenTime if a matching
-    JSON sidecar is found. The original video will no longer exist in
-    the Takeout export after this - only the output copy remains.
+  - Videos (mp4, mov, etc.) are not captioned. They're left in place in
+    the source folder, and a symbolic link to each one is created at the
+    matching location in the output folder instead. The symlink's own
+    modified time is always set to match photoTakenTime. Touching the
+    original source video and its JSON sidecar with that same timestamp
+    only happens with --touch-source, exactly like photos.
   - Edited versions: if both "IMG_1234.jpg" and "IMG_1234-edited.jpg"
     exist in the same folder, only the "-edited" version is processed;
     the original is skipped. Metadata is looked up under the edited
@@ -56,7 +57,6 @@ Notes:
 
 import json
 import os
-import shutil
 import time
 import argparse
 import textwrap
@@ -449,18 +449,19 @@ def caption_image(image_path: Path, json_path: Path, output_path: Path,
             touch_source_files(image_path, json_path, taken_epoch)
 
 
-def process_videos(in_root: Path, out_root: Path):
-    """Moves video files (mp4, mov, etc.) straight into the output
-    folder, preserving the relative directory structure, and sets each
-    moved file's modified time to its photoTakenTime if a matching JSON
-    sidecar is found. Metadata is read BEFORE the move so a bad/missing
-    JSON never blocks the move itself - it just means the timestamp
-    won't be updated. This MOVES (not copies) files: the originals will
-    no longer exist in the Takeout export afterward. The JSON sidecar
-    itself is left in place; only the video file is relocated."""
+def process_videos(in_root: Path, out_root: Path, touch_source: bool = False):
+    """Leaves video files (mp4, mov, etc.) in place in the source/input
+    folder, and instead creates a symbolic link to each one at the
+    matching relative path in the output folder. The symlink itself
+    (not the target it points to) always has its modified time set to
+    the video's photoTakenTime - this is the output artifact, so it's
+    unconditional, same as how photo outputs are always timestamped.
+    Touching the original source video and its JSON sidecar with that
+    same timestamp only happens when touch_source is True, exactly
+    matching how --touch-source behaves for photos."""
     videos = [p for p in in_root.rglob('*') if p.suffix.lower() in VIDEO_EXTS]
 
-    moved = 0
+    linked = 0
     no_metadata = 0
     errors = 0
 
@@ -475,7 +476,7 @@ def process_videos(in_root: Path, out_root: Path):
             except Exception as e:
                 print(f"    [warning] Could not read metadata for {video_path.name}: {e}")
         else:
-            print(f"[warning] No metadata found for {video_path.name} - moving without timestamp update")
+            print(f"[warning] No metadata found for {video_path.name} - linking without timestamp update")
             no_metadata += 1
 
         rel = video_path.relative_to(in_root)
@@ -483,22 +484,38 @@ def process_videos(in_root: Path, out_root: Path):
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
         try:
-            shutil.move(str(video_path), str(out_path))
+            if out_path.exists() or out_path.is_symlink():
+                out_path.unlink()
+            out_path.symlink_to(video_path.resolve())
         except Exception as e:
-            print(f"[error] Could not move {rel}: {e}")
+            print(f"[error] Could not create symlink for {rel}: {e}")
             errors += 1
             continue
 
-        moved += 1
-        print(f"[moved] {rel}")
+        linked += 1
+        print(f"[linked] {rel}")
 
         if taken_epoch is not None:
+            # Set the SYMLINK's own timestamp (follow_symlinks=False),
+            # not the target file it points to - these are independent
+            # on macOS/Linux. This always happens, same as photo outputs.
             try:
-                os.utime(out_path, (taken_epoch, taken_epoch))
+                os.utime(out_path, (taken_epoch, taken_epoch), follow_symlinks=False)
             except Exception as e:
-                print(f"    [warning] Could not set file timestamp: {e}")
+                print(f"    [warning] Could not set symlink timestamp: {e}")
 
-    print(f"\nVideos: {moved} moved, {no_metadata} moved without metadata, {errors} errors.")
+            if touch_source:
+                try:
+                    os.utime(video_path, (taken_epoch, taken_epoch))
+                except Exception as e:
+                    print(f"    [warning] Could not set source video timestamp: {e}")
+                if json_path:
+                    try:
+                        os.utime(json_path, (taken_epoch, taken_epoch))
+                    except Exception as e:
+                        print(f"    [warning] Could not set source JSON timestamp: {e}")
+
+    print(f"\nVideos: {linked} linked, {no_metadata} linked without metadata, {errors} errors.")
 
 
 def main():
@@ -514,7 +531,7 @@ def main():
     ap.add_argument('--no-location', action='store_true',
                      help='Never include location info in captions (useful for scans with invalid GPS data)')
     ap.add_argument('--touch-source', action='store_true',
-                     help='Also set the modified time of the ORIGINAL source image and its JSON sidecar (in the input folder) to match photoTakenTime. For -edited files, the corresponding non-edited original is touched too, so both share the same timestamp. This modifies your Takeout export in place.')
+                     help='Also set the modified time of ORIGINAL source files (in the input folder) to match photoTakenTime: the source image and its JSON sidecar for photos, or the source video and its JSON sidecar for videos. For -edited photos, the corresponding non-edited original is touched too. This modifies your Takeout export in place.')
     args = ap.parse_args()
 
     in_root = Path(args.input_folder)
@@ -550,7 +567,7 @@ def main():
 
     print(f"\nDone. {count} images captioned, {skipped} skipped.")
 
-    process_videos(in_root, out_root)
+    process_videos(in_root, out_root, touch_source=args.touch_source)
 
 
 if __name__ == '__main__':

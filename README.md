@@ -13,9 +13,10 @@ and shared album comments.
   to an output folder, preserving the original folder structure
 - Sets the captioned output file's modified time to match the photo's
   actual "Taken" date
-- Moves video files (mp4, mov, etc.) into the output folder as-is (no
-  caption, since burning text into video isn't handled here) and sets
-  their modified time too
+- Leaves video files (mp4, mov, etc.) in place in the source folder, and
+  creates a symbolic link to each one at the matching location in the
+  output folder instead (no caption is burned into video). The symlink's
+  own modified time is set to match "Taken" date.
 - Handles `-edited` photo pairs (e.g. `IMG_1234.jpg` +
   `IMG_1234-edited.jpg`) by using only the edited version
 
@@ -53,7 +54,7 @@ the photo + `.json` pairs, e.g. `"Takeout/Google Photos/Photos from 2019"`.
 | `--no-location` | Never include location info in the caption at all — no coordinates, no geocoding. Useful for scanned slides or old photos with bogus/inherited GPS data. |
 | `--font-size N` | Forces a fixed caption font size in pixels, identical on every image regardless of resolution. |
 | `--font-scale N` | Divisor for the default auto-scaled font size (`font_size = image_width / N`). Lower = larger text, higher = smaller. Default is `60`. Keeps caption text visually proportional across photos of different resolutions. Ignored if `--font-size` is set. |
-| `--touch-source` | Also sets the modified time of the **original** source image and its JSON sidecar (in the input folder) to match the photo's Taken date. For `-edited` files, the corresponding non-edited original is touched too. This modifies your Takeout export in place — off by default. |
+| `--touch-source` | Also sets the modified time of **original source files** (in the input folder) to match the "Taken" date: the source image and its JSON sidecar for photos, or the source video and its JSON sidecar for videos. For `-edited` photos, the corresponding non-edited original is touched too. This modifies your Takeout export in place — off by default. |
 
 ## What's in the caption
 
@@ -79,9 +80,15 @@ etc.) are intentionally left out of the caption.
   exist, only the edited version is captioned; the original is skipped
   (logged in the output). Metadata is looked up under the edited filename
   first, falling back to the original filename's JSON if needed.
-- **Videos**: moved (not copied) into the output folder — the original
-  will no longer exist in the Takeout export afterward. The JSON sidecar
-  itself is left behind; only the video file moves.
+- **Videos**: left in place in the source folder — nothing is moved or
+  deleted. A symbolic link to each video is created at the matching
+  location in the output folder. The symlink's own modified time (not
+  the source video's) is always set to match "Taken" date. Touching the
+  *original* source video and its JSON sidecar with that timestamp only
+  happens with `--touch-source`, exactly like photos. Since the output
+  only contains links, the output folder isn't a self-contained copy of
+  your videos — moving or deleting the source Takeout folder will break
+  those links.
 - **Fonts**: tries a list of common system font paths (macOS, Windows,
   Linux) before falling back to Pillow's built-in bitmap font, which
   ignores `--font-size`/`--font-scale` entirely — if you see a
